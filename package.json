@@ -1,0 +1,47 @@
+{
+  "name": "mcp-proxy-suite",
+  "version": "1.0.0",
+  "description": "本地MCP集成代理服务",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.7.0",
+    "cors": "^2.8.5",
+    "electron-store": "^8.1.0",
+    "express": "^4.18.2",
+    "fs-extra": "^11.3.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "electron": "^25.0.0",
+    "electron-builder": "^24.0.0",
+    "pkg": "^5.8.1"
+  },
+  "build": {
+    "appId": "com.mcpproxy.app",
+    "productName": "MCP代理服务",
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "assets/icons/icon.icns"
+    },
+    "win": {
+      "icon": "assets/icons/icon.ico"
+    },
+    "linux": {
+      "target": ["AppImage"],
+      "icon": "assets/icons"
+    }
+  },
+  "bin": "src/main/main.js",
+  "pkg": {
+    "assets": [
+    "node_modules/**/*",
+    "assets/**/*",
+    "src/**/*.js"
+  ],
+  "targets": ["node16-win-x64", "node16-macos-x64", "node16-linux-x64"]
+}
+}
