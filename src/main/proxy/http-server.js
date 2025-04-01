@@ -13,11 +13,22 @@ async function startHttpServer(mcpProxy, port) {
   // 解析JSON
   app.use(express.json());
   
+  // 尝试初始化MCP服务
+  try {
+    await mcpProxy.initialize();
+    console.log('MCP服务初始化成功');
+  } catch (error) {
+    console.warn('MCP服务初始化失败，将尝试不初始化直接获取工具列表:', error);
+  }
+  
   // SSE端点
   app.get('/sse', (req, res) => {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
+    
+    // 发送初始连接事件
+    res.write(`data: ${JSON.stringify({ type: 'connection', status: 'connected' })}\n\n`);
     
     // 保持连接活跃
     const keepAliveInterval = setInterval(() => {
@@ -38,40 +49,185 @@ async function startHttpServer(mcpProxy, port) {
   app.post('/message', async (req, res) => {
     try {
       const message = req.body;
+      console.log('收到客户端请求:', message);
       
-      // 保存请求ID与响应的映射关系
-      if (message.id) {
-        const responseHandler = (response) => {
-          if (response.id === message.id) {
-            // 一旦收到匹配ID的响应，就向客户端发送响应
-            res.status(200).json({ success: true });
-            // 移除监听器，避免内存泄漏
-            mcpProxy.removeListener('message', responseHandler);
+      // 验证是否为有效的JSON-RPC请求
+      if (!message.jsonrpc || message.jsonrpc !== '2.0' || !message.method) {
+        return res.status(400).json({
+          jsonrpc: '2.0',
+          id: message.id || null,
+          error: {
+            code: -32600,
+            message: '无效的请求'
           }
-        };
-        
-        // 为特定请求ID监听响应
-        mcpProxy.on('message', responseHandler);
-        
-        // 设置超时，如果长时间未收到响应，则返回超时错误
-        const timeoutId = setTimeout(() => {
-          mcpProxy.removeListener('message', responseHandler);
-          res.status(504).json({ error: 'Request timeout' });
-        }, 30000); // 30秒超时
-        
-        // 当响应发送后清除超时
-        res.on('finish', () => {
-          clearTimeout(timeoutId);
         });
-      } else {
-        // 如果没有ID，立即返回成功
-        res.status(202).json({ success: true });
       }
       
-      // 发送消息到MCP代理
-      mcpProxy.sendMessage(message);
+      // 处理tools/list请求
+      if (message.method === 'tools/list') {
+        try {
+          console.log('处理tools/list请求');
+          const response = await mcpProxy.sendRequest(message);
+          console.log('获取到tools/list响应:', response);
+          return res.json(response);
+        } catch (error) {
+          console.error('tools/list请求失败:', error);
+          return res.status(200).json({
+            jsonrpc: '2.0',
+            id: message.id,
+            error: {
+              code: -32603,
+              message: `内部错误: ${error.message}`
+            }
+          });
+        }
+      }
+      
+      // 处理初始化请求
+      if (message.method === 'initialize') {
+        try {
+          console.log('处理initialize请求');
+          const response = await mcpProxy.sendRequest(message);
+          console.log('获取到initialize响应:', response);
+          return res.json(response);
+        } catch (error) {
+          console.error('initialize请求失败:', error);
+          return res.status(200).json({
+            jsonrpc: '2.0',
+            id: message.id,
+            error: {
+              code: -32603,
+              message: `内部错误: ${error.message}`
+            }
+          });
+        }
+      }
+      
+      // 处理tools/call请求
+      if (message.method === 'tools/call') {
+        try {
+          console.log('处理tools/call请求');
+          const response = await mcpProxy.sendRequest(message);
+          console.log('获取到tools/call响应:', response);
+          return res.json(response);
+        } catch (error) {
+          console.error('tools/call请求失败:', error);
+          return res.status(200).json({
+            jsonrpc: '2.0',
+            id: message.id,
+            error: {
+              code: -32603,
+              message: `内部错误: ${error.message}`
+            }
+          });
+        }
+      }
+      
+      // 处理其他请求
+      try {
+        const response = await mcpProxy.sendRequest(message);
+        return res.json(response);
+      } catch (error) {
+        console.error(`${message.method}请求失败:`, error);
+        return res.status(200).json({
+          jsonrpc: '2.0',
+          id: message.id,
+          error: {
+            code: -32603,
+            message: `内部错误: ${error.message}`
+          }
+        });
+      }
     } catch (error) {
       console.error('处理消息失败:', error);
+      res.status(500).json({
+        jsonrpc: '2.0',
+        id: req.body.id || null,
+        error: {
+          code: -32603,
+          message: `内部错误: ${error.message}`
+        }
+      });
+    }
+  });
+  
+  // 添加API端点用于直接获取工具列表
+  app.get('/api/tools', async (req, res) => {
+    try {
+      console.log('通过API端点获取工具列表');
+      
+      // 构建获取工具列表请求
+      const toolsListRequest = {
+        jsonrpc: '2.0',
+        id: `api-tools-${Date.now()}`,
+        method: 'tools/list',
+        params: {}
+      };
+      
+      // 发送获取工具列表请求
+      try {
+        const response = await mcpProxy.sendRequest(toolsListRequest);
+        console.log('API端点获取工具列表响应:', response);
+        
+        if (response && response.result && response.result.tools) {
+          return res.json(response.result);
+        } else {
+          // 尝试使用discovery方法
+          const discoveryRequest = {
+            jsonrpc: '2.0',
+            id: `api-discovery-${Date.now()}`,
+            method: 'discovery',
+            params: {}
+          };
+          
+          try {
+            const discoveryResponse = await mcpProxy.sendRequest(discoveryRequest);
+            console.log('API端点获取discovery响应:', discoveryResponse);
+            
+            if (discoveryResponse && discoveryResponse.result && discoveryResponse.result.tools) {
+              return res.json(discoveryResponse.result);
+            }
+          } catch (discErr) {
+            console.error('API端点获取discovery失败:', discErr);
+          }
+          
+          // 如果没有找到工具，返回空工具列表
+          return res.json({ tools: [] });
+        }
+      } catch (error) {
+        console.error('API端点获取工具列表失败:', error);
+        // 返回一个空的工具列表
+        return res.json({ tools: [] });
+      }
+    } catch (error) {
+      console.error('API端点处理失败:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+  
+  // 设置Debug API端点
+  app.get('/api/debug', (req, res) => {
+    try {
+      // 发送一个简单的调试消息
+      const debugMessage = {
+        jsonrpc: '2.0',
+        id: `debug-${Date.now()}`,
+        method: 'echo',
+        params: { message: 'Hello from debug endpoint' }
+      };
+      
+      mcpProxy.sendMessage(debugMessage);
+      
+      // 返回调试信息
+      res.json({
+        info: {
+          connected: mcpProxy.clients.size > 0,
+          clientCount: mcpProxy.clients.size,
+          pendingRequests: mcpProxy.pendingRequests.size
+        }
+      });
+    } catch (error) {
+      console.error('调试端点失败:', error);
       res.status(500).json({ error: error.message });
     }
   });

@@ -173,10 +173,21 @@ class ServerManager {
           console.log(`使用npm包启动服务: ${npmPackage}`);
           
           // 构建环境变量
-          const mergedEnv = { ...process.env, ...env };
+          const mergedEnv = { 
+            ...process.env, 
+            ...env, 
+            DEBUG: '@modelcontextprotocol/*', 
+            MCP_VERBOSE: 'true' 
+          };
+          
+          // 如果是高德地图服务，添加调试参数
+          const args = ['-y', npmPackage];
+          if (builtinServer.id === 'amap') {
+            args.push('--stdio');
+          }
           
           // 使用npx启动服务
-          childProcess = spawn('npx', ['-y', npmPackage], {
+          childProcess = spawn('npx', args, {
             env: mergedEnv
           });
         } else {
@@ -217,6 +228,11 @@ class ServerManager {
       });
       
       console.log(`服务器 ${serverName} 已启动，监听端口: ${port}`);
+      
+      childProcess.stdout.on('data', (data) => {
+        console.log('高德MCP服务原始输出:', data.toString());
+      });
+      
       return id;
     } catch (error) {
       console.error(`启动服务器失败: ${error.message}`);

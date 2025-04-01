@@ -138,6 +138,7 @@
       </div>
       <button id="connect-sse-btn">连接</button>
       <button id="disconnect-sse-btn" disabled>断开连接</button>
+      <button id="initialize-btn" disabled>初始化连接</button>
     </div>
     
     <div class="tab-content" id="tools-tab">
@@ -148,6 +149,7 @@
           <select id="tool-select">
             <option value="">请选择工具...</option>
           </select>
+          <button id="get-tools-btn" style="margin-top: 10px; width: auto;">获取工具列表</button>
         </div>
         
         <div id="params-container">
@@ -181,6 +183,8 @@
     const executeBtn = document.getElementById('execute-btn');
     const resultContainer = document.getElementById('result-container');
     const resultOutput = document.getElementById('result-output');
+    const getToolsBtn = document.getElementById('get-tools-btn');
+    const initializeBtn = document.getElementById('initialize-btn');
     
     // 选项卡功能
     const tabs = document.querySelectorAll('.tab');
@@ -202,6 +206,13 @@
     let availableTools = [];
     let selectedTool = null;
     
+    // 页面加载时自动填充URL
+    document.addEventListener('DOMContentLoaded', () => {
+      const currentUrl = window.location.href;
+      const baseUrl = currentUrl.substring(0, currentUrl.lastIndexOf('/'));
+      sseUrlInput.value = baseUrl.replace('/inspector-mcp', '/sse');
+    });
+    
     // 连接到SSE端点
     connectSseBtn.addEventListener('click', () => {
       const sseUrl = sseUrlInput.value.trim();
@@ -221,6 +232,7 @@
           connectionStatus.className = 'connection-status connected';
           connectSseBtn.disabled = true;
           disconnectSseBtn.disabled = false;
+          initializeBtn.disabled = false;
           
           // 激活工具选项卡
           document.querySelector('.tab[data-tab="tools"]').click();
@@ -229,19 +241,33 @@
         // 消息事件
         eventSource.onmessage = (event) => {
           try {
+            console.log('收到原始SSE消息:', event.data);
             const data = JSON.parse(event.data);
-            console.log('接收到SSE消息:', data);
+            console.log('解析后的SSE消息:', data);
             
-            // 处理discovery响应
-            if (data.method === 'discovery') {
-              handleDiscoveryResponse(data);
+            // 处理连接状态消息
+            if (data.type === 'connection') {
+              connectionStatus.textContent = '已连接';
+              connectionStatus.className = 'connection-status connected';
+              return;
             }
-            // 处理工具调用响应
-            else if (data.method === 'tools.call') {
-              handleToolCallResponse(data);
+            
+            // 处理各种类型的响应
+            if (data.id) {
+              // 判断是否是我们等待的响应
+              if (window.lastRequestId && data.id === window.lastRequestId) {
+                // 处理工具列表响应
+                if (data.result && data.result.tools) {
+                  handleToolsListResponse(data);
+                }
+                // 处理工具调用响应
+                else if (data.result || data.error) {
+                  handleToolCallResponse(data);
+                }
+              }
             }
           } catch (error) {
-            console.error('解析SSE消息失败:', error);
+            console.error('解析SSE消息失败:', error, event.data);
           }
         };
         
@@ -252,15 +278,212 @@
           connectionStatus.className = 'connection-status disconnected';
           connectSseBtn.disabled = false;
           disconnectSseBtn.disabled = true;
+          initializeBtn.disabled = true;
           executeBtn.disabled = true;
         };
-        
-        // 发送discovery请求
-        sendDiscoveryRequest();
       } catch (error) {
         alert(`连接SSE失败: ${error.message}`);
       }
     });
+    
+    // 初始化连接按钮点击事件
+    initializeBtn.addEventListener('click', async () => {
+      if (!eventSource) {
+        alert('请先连接到SSE端点');
+        return;
+      }
+      
+      try {
+        // 构建初始化请求
+        const initRequest = {
+          jsonrpc: "2.0",
+          id: generateId(),
+          method: "initialize",
+          params: {
+            capabilities: {
+              tools: {
+                listChanged: true
+              }
+            }
+          }
+        };
+        
+        window.lastRequestId = initRequest.id;
+        console.log('发送初始化请求:', initRequest);
+        
+        // 显示等待消息
+        connectionStatus.textContent = '初始化中...';
+        
+        const response = await sendRequest(initRequest);
+        console.log('初始化响应:', response);
+        
+        if (response.result) {
+          connectionStatus.textContent = '已初始化';
+          alert('MCP连接初始化成功，现在可以获取工具列表');
+          
+          // 自动获取工具列表
+          getToolsBtn.click();
+        } else if (response.error) {
+          connectionStatus.textContent = '初始化失败';
+          alert(`初始化失败: ${response.error.message}`);
+        }
+      } catch (error) {
+        console.error('初始化失败:', error);
+        connectionStatus.textContent = '初始化失败';
+        alert(`初始化失败: ${error.message}`);
+      }
+    });
+    
+    // 获取工具列表按钮点击事件
+    getToolsBtn.addEventListener('click', () => {
+      if (!eventSource) {
+        alert('请先连接到SSE端点');
+        return;
+      }
+      
+      // 显示等待消息
+      toolSelect.innerHTML = '<option value="">获取工具列表中...</option>';
+      
+      // 尝试使用标准MCP格式请求工具列表
+      sendToolsListRequest();
+    });
+    
+    // 发送工具列表请求
+    function sendToolsListRequest() {
+      console.log('发送工具列表请求');
+      
+      // 尝试不同格式发送请求
+      tryMultipleRequestFormats()
+        .then(result => {
+          if (result) {
+            console.log('成功获取工具列表');
+          } else {
+            toolSelect.innerHTML = '<option value="">获取工具列表失败</option>';
+            alert('获取工具列表失败，请查看控制台日志');
+          }
+        })
+        .catch(error => {
+          console.error('获取工具列表失败:', error);
+          toolSelect.innerHTML = '<option value="">获取工具列表失败</option>';
+          alert(`获取工具列表失败: ${error.message}`);
+        });
+    }
+    
+    // 尝试多种请求格式
+    async function tryMultipleRequestFormats() {
+      // 格式1: 标准MCP格式
+      try {
+        const format1 = {
+          jsonrpc: "2.0",
+          id: generateId(),
+          method: "tools/list",
+          params: {}
+        };
+        
+        window.lastRequestId = format1.id;
+        console.log('尝试标准MCP格式:', format1);
+        const response1 = await sendRequest(format1);
+        
+        if (response1.result && response1.result.tools) {
+          handleToolsListResponse(response1);
+          return true;
+        }
+      } catch (err) {
+        console.log('标准MCP格式失败:', err);
+      }
+      
+      // 格式2: 尝试不同的method名称
+      try {
+        const format2 = {
+          jsonrpc: "2.0",
+          id: generateId(),
+          method: "discovery",
+          params: {}
+        };
+        
+        window.lastRequestId = format2.id;
+        console.log('尝试discovery格式:', format2);
+        const response2 = await sendRequest(format2);
+        
+        if (response2.result && response2.result.tools) {
+          handleToolsListResponse(response2);
+          return true;
+        }
+      } catch (err) {
+        console.log('discovery格式失败:', err);
+      }
+      
+      // 格式3: 尝试直接访问API端点
+      try {
+        const requestUrl = window.location.href.replace('/inspector-mcp', '/api/tools');
+        console.log('尝试直接API请求:', requestUrl);
+        
+        const response3 = await fetch(requestUrl);
+        if (response3.ok) {
+          const data = await response3.json();
+          if (data.tools && Array.isArray(data.tools)) {
+            handleDirectApiResponse(data);
+            return true;
+          }
+        }
+      } catch (err) {
+        console.log('直接API请求失败:', err);
+      }
+      
+      // 所有尝试都失败
+      return false;
+    }
+    
+    // 处理直接API响应
+    function handleDirectApiResponse(data) {
+      if (data.tools && Array.isArray(data.tools)) {
+        availableTools = data.tools.map(tool => {
+          return {
+            name: tool.name,
+            description: tool.description || '',
+            parameters: tool.inputSchema || { properties: {} }
+          };
+        });
+        
+        updateToolsDropdown();
+      }
+    }
+    
+    // 更新工具下拉列表
+    function updateToolsDropdown() {
+      console.log('更新工具下拉列表:', availableTools);
+      
+      toolSelect.innerHTML = '<option value="">请选择工具...</option>';
+      if (availableTools.length === 0) {
+        const option = document.createElement('option');
+        option.disabled = true;
+        option.textContent = '没有可用的工具';
+        toolSelect.appendChild(option);
+      } else {
+        for (const tool of availableTools) {
+          const option = document.createElement('option');
+          option.value = tool.name;
+          option.textContent = `${tool.name} - ${tool.description || ''}`;
+          toolSelect.appendChild(option);
+        }
+      }
+      
+      // 激活执行按钮
+      executeBtn.disabled = availableTools.length === 0;
+    }
+    
+    // 处理工具列表响应
+    function handleToolsListResponse(data) {
+      if (data.result && data.result.tools) {
+        availableTools = data.result.tools;
+        console.log('获取到工具列表:', availableTools);
+        updateToolsDropdown();
+      } else {
+        console.warn('未找到有效的工具列表');
+        toolSelect.innerHTML = '<option value="">没有可用的工具</option>';
+        executeBtn.disabled = true;
+      }
+    }
     
     // 断开SSE连接
     disconnectSseBtn.addEventListener('click', () => {
@@ -280,50 +503,6 @@
         availableTools = [];
       }
     });
-    
-    // 发送discovery请求
-    function sendDiscoveryRequest() {
-      const request = {
-        id: generateId(),
-        method: "discovery"
-      };
-      
-      fetch('/message', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(request)
-      }).catch(error => {
-        console.error('发送discovery请求失败:', error);
-      });
-    }
-    
-    // 处理discovery响应
-    function handleDiscoveryResponse(data) {
-      if (data.result && data.result.tools) {
-        availableTools = data.result.tools;
-        
-        // 更新工具下拉列表
-        toolSelect.innerHTML = '<option value="">请选择工具...</option>';
-        for (const tool of availableTools) {
-          const option = document.createElement('option');
-          option.value = tool.name;
-          option.textContent = `${tool.name} - ${tool.description || ''}`;
-          toolSelect.appendChild(option);
-        }
-        
-        // 激活执行按钮
-        executeBtn.disabled = false;
-      }
-    }
-    
-    // 处理工具调用响应
-    function handleToolCallResponse(data) {
-      // 显示结果
-      resultContainer.style.display = 'block';
-      resultOutput.textContent = JSON.stringify(data, null, 2);
-    }
     
     // 选择工具事件
     toolSelect.addEventListener('change', () => {
@@ -475,7 +654,7 @@
       inputs.forEach(input => {
         const event = new Event('input');
         input.dispatchEvent(event);
-        if (input.nextElementSibling.textContent) {
+        if (input.nextElementSibling && input.nextElementSibling.textContent) {
           isValid = false;
         }
       });
@@ -518,44 +697,69 @@
           });
         }
         
+        // 显示结果容器，清空之前的结果
+        resultContainer.style.display = 'block';
+        resultOutput.textContent = '正在执行...';
+        
         // 构建请求
         const request = {
+          jsonrpc: "2.0",
           id: generateId(),
-          method: "tools.call",
+          method: "tools/call",
           params: {
             name: selectedTool.name,
-            parameters
+            arguments: parameters
           }
         };
         
+        // 存储请求ID
+        window.lastRequestId = request.id;
+        
         // 发送请求
-        fetch('/message', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(request)
-        }).catch(error => {
-          console.error('发送工具调用请求失败:', error);
-          alert(`发送请求失败: ${error.message}`);
-        });
+        sendRequest(request)
+          .then(response => {
+            console.log('工具调用响应:', response);
+            handleToolCallResponse(response);
+          })
+          .catch(error => {
+            console.error('发送工具调用请求失败:', error);
+            resultOutput.textContent = `执行失败: ${error.message}`;
+          });
       } catch (error) {
         alert(`执行工具失败: ${error.message}`);
       }
     });
+    
+    // 处理工具调用响应
+    function handleToolCallResponse(data) {
+      // 显示结果
+      resultContainer.style.display = 'block';
+      resultOutput.textContent = JSON.stringify(data, null, 2);
+    }
+    
+    // 发送请求通用函数
+    function sendRequest(request) {
+      console.log('发送请求:', request);
+      return fetch('/message', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(request)
+      })
+      .then(response => {
+        if (!response.ok) {
+          throw new Error(`服务器响应错误: ${response.status}`);
+        }
+        return response.json();
+      });
+    }
     
     // 生成唯一ID
     function generateId() {
       return Math.random().toString(36).substring(2, 15) + 
              Math.random().toString(36).substring(2, 15);
     }
-    
-    // 页面加载时自动填充URL
-    document.addEventListener('DOMContentLoaded', () => {
-      const currentUrl = window.location.href;
-      const baseUrl = currentUrl.substring(0, currentUrl.lastIndexOf('/'));
-      sseUrlInput.value = baseUrl.replace('/inspector-mcp', '/sse');
-    });
   </script>
 </body>
-</html> </html> 
+</html> 
