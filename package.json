@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.7.0",
+    "@amap/amap-maps-mcp-server": "^0.0.7",
     "cors": "^2.8.5",
     "electron-store": "^8.1.0",
     "express": "^4.18.2",
@@ -31,17 +32,23 @@
       "icon": "assets/icons/icon.ico"
     },
     "linux": {
-      "target": ["AppImage"],
+      "target": [
+        "AppImage"
+      ],
       "icon": "assets/icons"
     }
   },
   "bin": "src/main/main.js",
   "pkg": {
     "assets": [
-    "node_modules/**/*",
-    "assets/**/*",
-    "src/**/*.js"
-  ],
-  "targets": ["node16-win-x64", "node16-macos-x64", "node16-linux-x64"]
-}
+      "node_modules/**/*",
+      "assets/**/*",
+      "src/**/*.js"
+    ],
+    "targets": [
+      "node16-win-x64",
+      "node16-macos-x64",
+      "node16-linux-x64"
+    ]
+  }
 }

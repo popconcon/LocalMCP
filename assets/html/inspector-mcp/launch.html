@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MCP Inspector</title>
+  <style>
+    body {
+      font-family: 'Arial', sans-serif;
+      margin: 0;
+      padding: 20px;
+      background-color: #f5f5f5;
+    }
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      background-color: white;
+      padding: 20px;
+      border-radius: 5px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
+    h1, h2 {
+      color: #2c3e50;
+    }
+    .form-group {
+      margin-bottom: 15px;
+    }
+    label {
+      display: block;
+      margin-bottom: 5px;
+      font-weight: bold;
+    }
+    input, select, textarea {
+      width: 100%;
+      padding: 8px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      box-sizing: border-box;
+    }
+    textarea {
+      min-height: 120px;
+      font-family: monospace;
+    }
+    button {
+      background-color: #3498db;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 4px;
+      cursor: pointer;
+      margin-right: 10px;
+    }
+    button:hover {
+      background-color: #2980b9;
+    }
+    button:disabled {
+      background-color: #bdc3c7;
+      cursor: not-allowed;
+    }
+    #tool-container {
+      margin-top: 20px;
+      padding: 15px;
+      border: 1px solid #eee;
+      border-radius: 4px;
+    }
+    #result-container {
+      margin-top: 20px;
+      background-color: #f8f9fa;
+      padding: 15px;
+      border-radius: 4px;
+      border: 1px solid #ddd;
+      max-height: 400px;
+      overflow-y: auto;
+    }
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+    }
+    .connection-status {
+      display: inline-block;
+      margin-left: 10px;
+      padding: 3px 8px;
+      border-radius: 10px;
+      font-size: 12px;
+    }
+    .connected {
+      background-color: #2ecc71;
+      color: white;
+    }
+    .disconnected {
+      background-color: #e74c3c;
+      color: white;
+    }
+    .tab-container {
+      display: flex;
+      margin-bottom: 15px;
+      border-bottom: 1px solid #ddd;
+    }
+    .tab {
+      padding: 10px 20px;
+      cursor: pointer;
+    }
+    .tab.active {
+      border-bottom: 2px solid #3498db;
+      font-weight: bold;
+    }
+    .tab-content {
+      display: none;
+    }
+    .tab-content.active {
+      display: block;
+    }
+    .param-type {
+      font-size: 12px;
+      color: #777;
+      margin-left: 5px;
+    }
+    .param-error {
+      color: #e74c3c;
+      font-size: 12px;
+      margin-top: 3px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>MCP Inspector <span id="connection-status" class="connection-status disconnected">未连接</span></h1>
+    
+    <div class="tab-container">
+      <div class="tab active" data-tab="connection">连接</div>
+      <div class="tab" data-tab="tools">工具调用</div>
+    </div>
+    
+    <div class="tab-content active" id="connection-tab">
+      <div class="form-group">
+        <label for="sse-url">SSE 端点 URL</label>
+        <input type="text" id="sse-url" placeholder="例如: http://localhost:3000/sse">
+      </div>
+      <button id="connect-sse-btn">连接</button>
+      <button id="disconnect-sse-btn" disabled>断开连接</button>
+    </div>
+    
+    <div class="tab-content" id="tools-tab">
+      <div id="tool-container">
+        <h2>可用工具</h2>
+        <div class="form-group">
+          <label for="tool-select">选择工具</label>
+          <select id="tool-select">
+            <option value="">请选择工具...</option>
+          </select>
+        </div>
+        
+        <div id="params-container">
+          <!-- 参数表单将在这里动态生成 -->
+        </div>
+        
+        <div class="form-group">
+          <label for="raw-params">原始JSON参数 (可选)</label>
+          <textarea id="raw-params" placeholder="输入JSON格式的参数"></textarea>
+        </div>
+        
+        <button id="execute-btn" disabled>执行</button>
+      </div>
+      
+      <div id="result-container" style="display: none;">
+        <h2>执行结果</h2>
+        <pre id="result-output"></pre>
+      </div>
+    </div>
+  </div>
+  
+  <script>
+    // DOM元素
+    const sseUrlInput = document.getElementById('sse-url');
+    const connectSseBtn = document.getElementById('connect-sse-btn');
+    const disconnectSseBtn = document.getElementById('disconnect-sse-btn');
+    const connectionStatus = document.getElementById('connection-status');
+    const toolSelect = document.getElementById('tool-select');
+    const paramsContainer = document.getElementById('params-container');
+    const rawParamsTextarea = document.getElementById('raw-params');
+    const executeBtn = document.getElementById('execute-btn');
+    const resultContainer = document.getElementById('result-container');
+    const resultOutput = document.getElementById('result-output');
+    
+    // 选项卡功能
+    const tabs = document.querySelectorAll('.tab');
+    tabs.forEach(tab => {
+      tab.addEventListener('click', () => {
+        // 移除所有选项卡和内容的active类
+        tabs.forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+        
+        // 添加active类到当前选项卡和相应的内容
+        tab.classList.add('active');
+        const tabId = `${tab.dataset.tab}-tab`;
+        document.getElementById(tabId).classList.add('active');
+      });
+    });
+    
+    // 全局变量
+    let eventSource = null;
+    let availableTools = [];
+    let selectedTool = null;
+    
+    // 连接到SSE端点
+    connectSseBtn.addEventListener('click', () => {
+      const sseUrl = sseUrlInput.value.trim();
+      if (!sseUrl) {
+        alert('请输入SSE端点URL');
+        return;
+      }
+      
+      try {
+        // 创建EventSource
+        eventSource = new EventSource(sseUrl);
+        
+        // 连接打开事件
+        eventSource.onopen = () => {
+          console.log('SSE连接已打开');
+          connectionStatus.textContent = '已连接';
+          connectionStatus.className = 'connection-status connected';
+          connectSseBtn.disabled = true;
+          disconnectSseBtn.disabled = false;
+          
+          // 激活工具选项卡
+          document.querySelector('.tab[data-tab="tools"]').click();
+        };
+        
+        // 消息事件
+        eventSource.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            console.log('接收到SSE消息:', data);
+            
+            // 处理discovery响应
+            if (data.method === 'discovery') {
+              handleDiscoveryResponse(data);
+            }
+            // 处理工具调用响应
+            else if (data.method === 'tools.call') {
+              handleToolCallResponse(data);
+            }
+          } catch (error) {
+            console.error('解析SSE消息失败:', error);
+          }
+        };
+        
+        // 错误事件
+        eventSource.onerror = (error) => {
+          console.error('SSE连接错误:', error);
+          connectionStatus.textContent = '连接错误';
+          connectionStatus.className = 'connection-status disconnected';
+          connectSseBtn.disabled = false;
+          disconnectSseBtn.disabled = true;
+          executeBtn.disabled = true;
+        };
+        
+        // 发送discovery请求
+        sendDiscoveryRequest();
+      } catch (error) {
+        alert(`连接SSE失败: ${error.message}`);
+      }
+    });
+    
+    // 断开SSE连接
+    disconnectSseBtn.addEventListener('click', () => {
+      if (eventSource) {
+        eventSource.close();
+        eventSource = null;
+        
+        connectionStatus.textContent = '未连接';
+        connectionStatus.className = 'connection-status disconnected';
+        connectSseBtn.disabled = false;
+        disconnectSseBtn.disabled = true;
+        executeBtn.disabled = true;
+        
+        // 清空工具和参数
+        toolSelect.innerHTML = '<option value="">请选择工具...</option>';
+        paramsContainer.innerHTML = '';
+        availableTools = [];
+      }
+    });
+    
+    // 发送discovery请求
+    function sendDiscoveryRequest() {
+      const request = {
+        id: generateId(),
+        method: "discovery"
+      };
+      
+      fetch('/message', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(request)
+      }).catch(error => {
+        console.error('发送discovery请求失败:', error);
+      });
+    }
+    
+    // 处理discovery响应
+    function handleDiscoveryResponse(data) {
+      if (data.result && data.result.tools) {
+        availableTools = data.result.tools;
+        
+        // 更新工具下拉列表
+        toolSelect.innerHTML = '<option value="">请选择工具...</option>';
+        for (const tool of availableTools) {
+          const option = document.createElement('option');
+          option.value = tool.name;
+          option.textContent = `${tool.name} - ${tool.description || ''}`;
+          toolSelect.appendChild(option);
+        }
+        
+        // 激活执行按钮
+        executeBtn.disabled = false;
+      }
+    }
+    
+    // 处理工具调用响应
+    function handleToolCallResponse(data) {
+      // 显示结果
+      resultContainer.style.display = 'block';
+      resultOutput.textContent = JSON.stringify(data, null, 2);
+    }
+    
+    // 选择工具事件
+    toolSelect.addEventListener('change', () => {
+      const toolName = toolSelect.value;
+      if (!toolName) {
+        paramsContainer.innerHTML = '';
+        selectedTool = null;
+        return;
+      }
+      
+      // 查找选中的工具
+      selectedTool = availableTools.find(t => t.name === toolName);
+      if (!selectedTool) {
+        alert('未找到工具信息');
+        return;
+      }
+      
+      // 更新原始JSON参数
+      rawParamsTextarea.value = '{}';
+      
+      // 生成参数表单
+      generateParamsForm(selectedTool);
+    });
+    
+    // 生成参数表单
+    function generateParamsForm(tool) {
+      // 清空参数容器
+      paramsContainer.innerHTML = '';
+      
+      // 检查工具是否有参数
+      if (!tool.parameters || !tool.parameters.properties) {
+        return;
+      }
+      
+      // 创建参数表单
+      const parameters = tool.parameters.properties;
+      const requiredParams = tool.parameters.required || [];
+      
+      for (const [name, param] of Object.entries(parameters)) {
+        const formGroup = document.createElement('div');
+        formGroup.className = 'form-group';
+        
+        const label = document.createElement('label');
+        label.setAttribute('for', `param-${name}`);
+        label.innerHTML = `${name}${requiredParams.includes(name) ? ' <span style="color: red;">*</span>' : ''} <span class="param-type">(${param.type})</span>`;
+        
+        let input;
+        if (param.type === 'boolean') {
+          input = document.createElement('select');
+          const trueOption = document.createElement('option');
+          trueOption.value = 'true';
+          trueOption.textContent = 'true';
+          
+          const falseOption = document.createElement('option');
+          falseOption.value = 'false';
+          falseOption.textContent = 'false';
+          
+          input.appendChild(trueOption);
+          input.appendChild(falseOption);
+        } else if (param.type === 'object' || param.type === 'array') {
+          input = document.createElement('textarea');
+        } else {
+          input = document.createElement('input');
+          input.type = param.type === 'number' ? 'number' : 'text';
+        }
+        
+        input.id = `param-${name}`;
+        input.name = name;
+        input.dataset.type = param.type;
+        input.dataset.required = requiredParams.includes(name);
+        
+        // 如果有描述，添加placeholder
+        if (param.description) {
+          input.placeholder = param.description;
+        }
+        
+        // 如果有默认值，设置默认值
+        if (param.default !== undefined) {
+          if (param.type === 'object' || param.type === 'array') {
+            input.value = JSON.stringify(param.default, null, 2);
+          } else {
+            input.value = param.default;
+          }
+        }
+        
+        // 添加验证
+        input.addEventListener('input', validateParam);
+        
+        // 添加错误提示元素
+        const errorElement = document.createElement('div');
+        errorElement.className = 'param-error';
+        errorElement.id = `error-${name}`;
+        
+        formGroup.appendChild(label);
+        formGroup.appendChild(input);
+        formGroup.appendChild(errorElement);
+        paramsContainer.appendChild(formGroup);
+      }
+    }
+    
+    // 验证参数
+    function validateParam(event) {
+      const input = event.target;
+      const name = input.name;
+      const type = input.dataset.type;
+      const required = input.dataset.required === 'true';
+      const value = input.value.trim();
+      const errorElement = document.getElementById(`error-${name}`);
+      
+      // 清除错误
+      errorElement.textContent = '';
+      
+      // 必填验证
+      if (required && !value) {
+        errorElement.textContent = '此参数是必需的';
+        return false;
+      }
+      
+      // 类型验证
+      if (value) {
+        if (type === 'number') {
+          if (isNaN(Number(value))) {
+            errorElement.textContent = '必须是数字';
+            return false;
+          }
+        } else if (type === 'object' || type === 'array') {
+          try {
+            JSON.parse(value);
+          } catch (e) {
+            errorElement.textContent = '无效的JSON格式';
+            return false;
+          }
+        }
+      }
+      
+      return true;
+    }
+    
+    // 执行工具
+    executeBtn.addEventListener('click', () => {
+      if (!selectedTool) {
+        alert('请选择工具');
+        return;
+      }
+      
+      // 验证所有参数
+      let isValid = true;
+      const inputs = paramsContainer.querySelectorAll('input, select, textarea');
+      inputs.forEach(input => {
+        const event = new Event('input');
+        input.dispatchEvent(event);
+        if (input.nextElementSibling.textContent) {
+          isValid = false;
+        }
+      });
+      
+      if (!isValid) {
+        alert('请修正参数错误');
+        return;
+      }
+      
+      try {
+        let parameters = {};
+        
+        // 使用原始JSON参数或表单参数
+        if (rawParamsTextarea.value.trim()) {
+          try {
+            parameters = JSON.parse(rawParamsTextarea.value);
+          } catch (e) {
+            alert(`原始JSON参数格式无效: ${e.message}`);
+            return;
+          }
+        } else {
+          // 收集表单参数
+          inputs.forEach(input => {
+            const name = input.name;
+            const value = input.value.trim();
+            const type = input.dataset.type;
+            
+            if (value) {
+              // 根据类型转换值
+              if (type === 'number') {
+                parameters[name] = Number(value);
+              } else if (type === 'boolean') {
+                parameters[name] = value.toLowerCase() === 'true';
+              } else if (type === 'object' || type === 'array') {
+                parameters[name] = JSON.parse(value);
+              } else {
+                parameters[name] = value;
+              }
+            }
+          });
+        }
+        
+        // 构建请求
+        const request = {
+          id: generateId(),
+          method: "tools.call",
+          params: {
+            name: selectedTool.name,
+            parameters
+          }
+        };
+        
+        // 发送请求
+        fetch('/message', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(request)
+        }).catch(error => {
+          console.error('发送工具调用请求失败:', error);
+          alert(`发送请求失败: ${error.message}`);
+        });
+      } catch (error) {
+        alert(`执行工具失败: ${error.message}`);
+      }
+    });
+    
+    // 生成唯一ID
+    function generateId() {
+      return Math.random().toString(36).substring(2, 15) + 
+             Math.random().toString(36).substring(2, 15);
+    }
+    
+    // 页面加载时自动填充URL
+    document.addEventListener('DOMContentLoaded', () => {
+      const currentUrl = window.location.href;
+      const baseUrl = currentUrl.substring(0, currentUrl.lastIndexOf('/'));
+      sseUrlInput.value = baseUrl.replace('/inspector-mcp', '/sse');
+    });
+  </script>
+</body>
+</html> </html> 

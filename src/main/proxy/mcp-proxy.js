@@ -7,6 +7,7 @@ class McpProxy extends EventEmitter {
     this.stdout = stdout;
     this.buffer = '';
     this.clients = new Set();
+    this.pendingRequests = new Map(); // 存储待处理的请求
     
     // 处理stdout数据
     this.stdout.on('data', (data) => {
@@ -18,6 +19,13 @@ class McpProxy extends EventEmitter {
         const messages = this.extractMessages();
         
         for (const message of messages) {
+          // 检查是否是某个请求的响应
+          if (message.id && this.pendingRequests.has(message.id)) {
+            const { resolve } = this.pendingRequests.get(message.id);
+            resolve(message);
+            this.pendingRequests.delete(message.id);
+          }
+          
           // 转发消息到所有连接的客户端
           this.broadcast(message);
         }
@@ -91,6 +99,43 @@ class McpProxy extends EventEmitter {
     this.stdin.write(message + '\n');
   }
   
+  // 发送请求并等待响应
+  sendRequest(request) {
+    return new Promise((resolve, reject) => {
+      // 确保请求有ID
+      if (!request.id) {
+        request.id = this.generateRequestId();
+      }
+      
+      // 存储请求和解析函数
+      this.pendingRequests.set(request.id, { resolve, reject });
+      
+      // 设置超时
+      const timeout = setTimeout(() => {
+        if (this.pendingRequests.has(request.id)) {
+          const { reject } = this.pendingRequests.get(request.id);
+          reject(new Error('请求超时'));
+          this.pendingRequests.delete(request.id);
+        }
+      }, 30000); // 30秒超时
+      
+      try {
+        // 发送请求
+        this.sendMessage(request);
+      } catch (error) {
+        clearTimeout(timeout);
+        this.pendingRequests.delete(request.id);
+        reject(error);
+      }
+    });
+  }
+  
+  // 生成唯一请求ID
+  generateRequestId() {
+    return Math.random().toString(36).substring(2, 15) + 
+           Math.random().toString(36).substring(2, 15);
+  }
+  
   // 广播消息到所有连接的客户端
   broadcast(message) {
     const messageStr = JSON.stringify(message);
@@ -126,6 +171,12 @@ class McpProxy extends EventEmitter {
       }
     }
     this.clients.clear();
+    
+    // 清理所有待处理的请求
+    for (const { reject } of this.pendingRequests.values()) {
+      reject(new Error('连接已关闭'));
+    }
+    this.pendingRequests.clear();
   }
 }
 

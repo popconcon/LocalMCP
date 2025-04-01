@@ -140,9 +140,9 @@ function buildTrayMenu(serverManager, configManager) {
             }
           },
           { 
-            label: '打开Inspector', 
+            label: 'MCP Inspector', 
             click: () => {
-              shell.openExternal(`http://localhost:${server.port}/inspector`);
+              shell.openExternal(`http://localhost:${server.port}/inspector-mcp`);
             }
           },
           { 
@@ -156,6 +156,21 @@ function buildTrayMenu(serverManager, configManager) {
     ] : []),
     
     { type: 'separator' },
+    
+    // 开发工具选项
+    {
+      label: '开发工具',
+      submenu: [
+        { 
+          label: 'MCP Inspector', 
+          click: () => {
+            // 使用主要活动服务器的端口，如果没有则使用配置的默认端口
+            const port = activeServers.length > 0 ? activeServers[0].port : configManager.get('port', 3000);
+            shell.openExternal(`http://localhost:${port}/inspector-mcp`);
+          }
+        }
+      ]
+    },
     
     // 设置选项
     { 
@@ -179,6 +194,164 @@ function buildTrayMenu(serverManager, configManager) {
             const { response, inputField } = result;
             if (response === 0 && inputField && !isNaN(parseInt(inputField))) {
               configManager.set('port', parseInt(inputField));
+            }
+          }
+        },
+        {
+          label: '高德地图API Key',
+          click: async () => {
+            const currentKey = configManager.get('amapApiKey', '');
+            const focusedWindow = require('electron').BrowserWindow.getFocusedWindow();
+            
+            try {
+              // 弹出输入对话框
+              const result = await dialog.showMessageBox(focusedWindow, {
+                title: '高德地图API Key',
+                message: '请输入您的高德地图API Key:',
+                detail: '您可以在高德开放平台(https://lbs.amap.com/)申请API Key',
+                buttons: ['确定', '取消'],
+                defaultId: 0,
+                cancelId: 1
+              });
+              
+              if (result.response === 0) {
+                // 如果用户点击了确定，弹出输入框
+                const { net } = require('electron');
+                const promptOptions = {
+                  title: '输入API Key',
+                  label: '高德地图API Key:',
+                  value: currentKey || '',
+                  inputAttrs: {
+                    type: 'text'
+                  },
+                  type: 'promptInput' // 使用promptInput类型
+                };
+                
+                // 使用另一种方式获取用户输入
+                const promptWindow = new require('electron').BrowserWindow({
+                  width: 400,
+                  height: 200,
+                  show: false,
+                  webPreferences: {
+                    nodeIntegration: true
+                  }
+                });
+                
+                // 创建临时HTML文件用于输入
+                const fs = require('fs');
+                const os = require('os');
+                const tempPath = path.join(os.tmpdir(), 'amap-key-input.html');
+                
+                const htmlContent = `
+                <!DOCTYPE html>
+                <html>
+                <head>
+                  <title>输入高德地图API Key</title>
+                  <style>
+                    body { font-family: system-ui; padding: 20px; }
+                    input { width: 100%; padding: 8px; margin: 10px 0; }
+                    button { padding: 8px 15px; margin-right: 10px; }
+                  </style>
+                </head>
+                <body>
+                  <h3>输入高德地图API Key</h3>
+                  <input id="apiKeyInput" type="text" value="${currentKey || ''}" placeholder="请输入您的高德地图API Key" />
+                  <div style="text-align: right; margin-top: 20px;">
+                    <button id="cancelBtn">取消</button>
+                    <button id="confirmBtn">确定</button>
+                  </div>
+                  <script>
+                    document.getElementById('confirmBtn').addEventListener('click', () => {
+                      const apiKey = document.getElementById('apiKeyInput').value;
+                      window.electronAPI.setApiKey(apiKey);
+                    });
+                    document.getElementById('cancelBtn').addEventListener('click', () => {
+                      window.electronAPI.cancel();
+                    });
+                    // 按下Enter键等同于点击确定按钮
+                    document.getElementById('apiKeyInput').addEventListener('keydown', (e) => {
+                      if (e.key === 'Enter') {
+                        document.getElementById('confirmBtn').click();
+                      }
+                    });
+                  </script>
+                </body>
+                </html>
+                `;
+                
+                fs.writeFileSync(tempPath, htmlContent);
+                
+                promptWindow.loadFile(tempPath);
+                promptWindow.once('ready-to-show', () => {
+                  promptWindow.show();
+                });
+                
+                // 添加IPC通信
+                const { ipcMain } = require('electron');
+                
+                const resultPromise = new Promise((resolve) => {
+                  ipcMain.once('set-api-key', (event, apiKey) => {
+                    promptWindow.close();
+                    resolve(apiKey);
+                  });
+                  
+                  ipcMain.once('cancel-api-key', () => {
+                    promptWindow.close();
+                    resolve(null);
+                  });
+                  
+                  promptWindow.webContents.executeJavaScript(`
+                    if (!window.electronAPI) {
+                      window.electronAPI = {
+                        setApiKey: (apiKey) => {
+                          window.electronAPI.apiKey = apiKey;
+                          window.electronAPI.ipcRenderer.send('set-api-key', apiKey);
+                        },
+                        cancel: () => {
+                          window.electronAPI.ipcRenderer.send('cancel-api-key');
+                        },
+                        ipcRenderer: {
+                          send: (channel, data) => {
+                            const event = new CustomEvent(channel, { detail: data });
+                            window.dispatchEvent(event);
+                          }
+                        }
+                      };
+                    }
+                    
+                    window.addEventListener('set-api-key', (e) => {
+                      window.ipcRenderer.send('set-api-key', e.detail);
+                    });
+                    
+                    window.addEventListener('cancel-api-key', () => {
+                      window.ipcRenderer.send('cancel-api-key');
+                    });
+                  `);
+                });
+                
+                promptWindow.on('closed', () => {
+                  ipcMain.removeAllListeners('set-api-key');
+                  ipcMain.removeAllListeners('cancel-api-key');
+                  try {
+                    fs.unlinkSync(tempPath);
+                  } catch (e) {
+                    console.error('删除临时文件失败:', e);
+                  }
+                });
+                
+                const apiKey = await resultPromise;
+                if (apiKey) {
+                  configManager.set('amapApiKey', apiKey);
+                  dialog.showMessageBox(focusedWindow, {
+                    type: 'info',
+                    title: '成功',
+                    message: 'API Key已保存'
+                  });
+                }
+              }
+            } catch (error) {
+              console.error('设置API Key失败:', error);
+              dialog.showErrorBox('错误', `设置API Key失败: ${error.message}`);
             }
           }
         },
