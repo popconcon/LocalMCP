@@ -9,7 +9,8 @@ class ServerManager {
     this.activeServers = {};
     this.builtinServers = [
       { id: 'file-server', name: '文件操作服务', path: path.join(__dirname, 'builtin-servers/file-server.js') },
-      { id: 'web-search', name: '网络搜索服务', path: path.join(__dirname, 'builtin-servers/web-search.js') }
+      { id: 'web-search', name: '网络搜索服务', path: path.join(__dirname, 'builtin-servers/web-search.js') },
+      { id: 'amap', name: '高德地图服务', path: path.join(__dirname, 'builtin-servers/amap.js') }
     ];
   }
   
