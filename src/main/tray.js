@@ -22,7 +22,11 @@ function setupTray(serverManager, configManager) {
         const smallIcon = emptyIcon.resize({ width: 16, height: 16 });
         fs.writeFileSync(iconPath, smallIcon.toPNG());
       }
-      tray = new Tray(iconPath);
+      
+      const icon = nativeImage.createFromPath(iconPath);
+      const resizedIcon = icon.resize({ width: 16, height: 16 });
+      resizedIcon.setTemplateImage(true);
+      tray = new Tray(resizedIcon);
     } else {
       // 在Windows/Linux上使用普通图标
       const iconPath = path.join(__dirname, '../../assets/icons/tray.png');
