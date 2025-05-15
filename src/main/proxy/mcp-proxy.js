@@ -1,13 +1,15 @@
 const { EventEmitter } = require('events');
+const { addLog } = require('../log-window');
 
 class McpProxy extends EventEmitter {
-  constructor(stdin, stdout) {
+  constructor(stdin, stdout, serverId = null) {
     super();
     this.stdin = stdin;
     this.stdout = stdout;
     this.buffer = '';
     this.clients = new Set();
     this.pendingRequests = new Map(); // 存储待处理的请求
+    this.serverId = serverId; // 存储服务ID用于日志记录
     
     // 处理stdout数据
     this.stdout.on('data', (data) => {
@@ -19,7 +21,13 @@ class McpProxy extends EventEmitter {
         const messages = this.extractMessages();
         
         for (const message of messages) {
-          console.log('从MCP服务接收到消息:', JSON.stringify(message));
+          const logMessage = `从MCP服务接收到消息: ${JSON.stringify(message)}`;
+          console.log(logMessage);
+          
+          // 记录日志
+          if (this.serverId) {
+            addLog(this.serverId, 'info', logMessage);
+          }
           
           // 检查是否是某个请求的响应
           if (message.id && this.pendingRequests.has(message.id)) {
@@ -33,15 +41,37 @@ class McpProxy extends EventEmitter {
           this.broadcast(message);
         }
       } catch (error) {
-        console.error('Error processing server output:', error);
+        const errorMessage = `处理服务输出时出错: ${error.message}`;
+        console.error(errorMessage);
+        
+        // 记录错误日志
+        if (this.serverId) {
+          addLog(this.serverId, 'error', errorMessage);
+        }
       }
     });
     
     this.stdout.on('end', () => {
+      const message = 'MCP服务已结束';
+      console.log(message);
+      
+      // 记录日志
+      if (this.serverId) {
+        addLog(this.serverId, 'info', message);
+      }
+      
       this.emit('end');
     });
     
     this.stdout.on('error', (error) => {
+      const errorMessage = `MCP服务错误: ${error.message}`;
+      console.error(errorMessage);
+      
+      // 记录错误日志
+      if (this.serverId) {
+        addLog(this.serverId, 'error', errorMessage);
+      }
+      
       this.emit('error', error);
     });
   }
@@ -155,7 +185,14 @@ class McpProxy extends EventEmitter {
       message = JSON.stringify(message);
     }
     
-    console.log('发送到MCP服务:', message);
+    const logMessage = `发送到MCP服务: ${message}`;
+    console.log(logMessage);
+    
+    // 记录日志
+    if (this.serverId) {
+      addLog(this.serverId, 'info', logMessage);
+    }
+    
     this.stdin.write(message + '\n');
   }
   
@@ -177,7 +214,14 @@ class McpProxy extends EventEmitter {
       // 设置超时 - 延长到60秒以适应某些较慢的服务
       const timeout = setTimeout(() => {
         if (this.pendingRequests.has(request.id)) {
-          console.warn(`请求超时: ${request.id}, method: ${request.method}`);
+          const timeoutMessage = `请求超时: ${request.id}, method: ${request.method}`;
+          console.warn(timeoutMessage);
+          
+          // 记录日志
+          if (this.serverId) {
+            addLog(this.serverId, 'warn', timeoutMessage);
+          }
+          
           const { reject } = this.pendingRequests.get(request.id);
           reject(new Error('请求超时'));
           this.pendingRequests.delete(request.id);
@@ -192,9 +236,22 @@ class McpProxy extends EventEmitter {
         this.pendingRequests.get(request.id).timeout = timeout;
         
         // 打印已发送的请求信息
-        console.log(`已发送请求 ${request.id} (${request.method})`);
+        const requestMessage = `已发送请求 ${request.id} (${request.method})`;
+        console.log(requestMessage);
+        
+        // 记录日志
+        if (this.serverId) {
+          addLog(this.serverId, 'info', requestMessage);
+        }
       } catch (error) {
-        console.error(`发送请求 ${request.id} 失败:`, error);
+        const errorMessage = `发送请求 ${request.id} 失败: ${error.message}`;
+        console.error(errorMessage);
+        
+        // 记录错误日志
+        if (this.serverId) {
+          addLog(this.serverId, 'error', errorMessage);
+        }
+        
         clearTimeout(timeout);
         this.pendingRequests.delete(request.id);
         reject(error);

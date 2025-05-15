@@ -3,6 +3,7 @@ const { spawn } = require('child_process');
 const { McpProxy } = require('./proxy/mcp-proxy');
 const { startHttpServer } = require('./proxy/http-server');
 const { dialog } = require('electron');
+const { addLog } = require('./log-window');
 
 class ServerManager {
   constructor(configManager) {
@@ -202,7 +203,7 @@ class ServerManager {
       }
       
       // 创建MCP代理
-      const mcpProxy = new McpProxy(childProcess.stdin, childProcess.stdout);
+      const mcpProxy = new McpProxy(childProcess.stdin, childProcess.stdout, id);
       
       // 启动HTTP服务器
       const httpServer = await startHttpServer(mcpProxy, port);
@@ -229,8 +230,26 @@ class ServerManager {
       
       console.log(`服务器 ${serverName} 已启动，监听端口: ${port}`);
       
+      // 设置服务进程的标准输出和错误输出监听，收集日志
       childProcess.stdout.on('data', (data) => {
-        console.log('高德MCP服务原始输出:', data.toString());
+        const message = data.toString().trim();
+        console.log(`[${serverName}]: ${message}`);
+        // 将日志添加到日志系统
+        addLog(id, 'info', message);
+      });
+      
+      childProcess.stderr.on('data', (data) => {
+        const message = data.toString().trim();
+        console.error(`[${serverName}] 错误: ${message}`);
+        // 将错误日志添加到日志系统
+        addLog(id, 'error', message);
+      });
+      
+      // 进程退出事件监听
+      childProcess.on('exit', (code, signal) => {
+        const exitMessage = `进程已退出，退出码: ${code}, 信号: ${signal || 'none'}`;
+        console.log(`[${serverName}]: ${exitMessage}`);
+        addLog(id, code === 0 ? 'info' : 'error', exitMessage);
       });
       
       return id;

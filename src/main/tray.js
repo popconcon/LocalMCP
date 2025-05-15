@@ -149,6 +149,14 @@ function buildTrayMenu(serverManager, configManager) {
               shell.openExternal(`http://localhost:${server.port}/inspector-mcp`);
             }
           },
+          {
+            label: '查看日志', 
+            click: () => {
+              // 打开日志窗口
+              const { createLogWindow } = require('./log-window');
+              createLogWindow(server.id);
+            }
+          },
           { 
             label: '停止服务器', 
             click: () => {
